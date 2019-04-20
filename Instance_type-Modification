@@ -1,0 +1,75 @@
+Go to IAM:
+
+// Step 1: Create a policy
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:ModifyInstanceAttribute",
+                "ec2:StartInstances",
+                "ec2:StopInstances",
+                "ec2:DescribeInstances"
+            ],
+            "Resource":"*"
+        }
+    ]
+}
+
+=========================================================================================================================
+//Step 2:  Create a role
+  Give lambda permission   
+  attach above created policy to the role
+  
+==========================================================================================================================
+// Step 3: Create a lambda fuction 
+  Use above created existing role
+  Paste the below mentioned code Node.js 6.10
+  
+// Demonstration video can be found at: https://youtu.be/_gJyK1-NGq8
+
+// ModifyEC2InstanceType
+
+const AWS = require('aws-sdk');
+
+exports.handler = (event, context, callback) => {
+    const { instanceId, instanceRegion, instanceType } = event;
+    
+    const ec2 = new AWS.EC2({ region: instanceRegion });
+    
+    Promise.resolve()
+        .then(() => ec2.stopInstances({ InstanceIds: [instanceId] }).promise())
+        .then(() => ec2.waitFor('instanceStopped', { InstanceIds: [instanceId] }).promise())
+        .then(() => ec2.modifyInstanceAttribute({InstanceId: instanceId, InstanceType: { Value: instanceType } }).promise())
+        .then(() => ec2.startInstances({ InstanceIds: [instanceId] }).promise())
+        .then(() => callback(null, `Successfully modified ${event.instanceId} to ${event.instanceType}`))
+        .catch(err => callback(err));
+};
+
+
+// Set the timeout to atleast 3minutes
+
+// Configure the test event using below code
+
+{
+  "instanceRegion": "ap-south-1",
+  "instanceId": "i-034298a2be77d66a4",
+  "instanceType":"t2.nano"           #instance type you want after modification
+}
+
+====================================================================================================================
+// Step 4: Setting up event in cloud watch
+
+// Got to cloudwatch and create a event rule
+create rule > select schedule > cron >
+Target > select lambda function
+configure input(json text) >> insert 
+{
+  "instanceRegion": "ap-south-1",
+  "instanceId": "i-034298a2be77d66a4",
+  "instanceType":"t2.nano"
+}
+
+Done!!
