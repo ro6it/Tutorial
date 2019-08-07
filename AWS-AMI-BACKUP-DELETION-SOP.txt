@@ -1,0 +1,265 @@
+Lambda start-stop: SOP
+
+STEP1: CREATE A ROLE AND SELECT ON BEHALF OF CLOUDWATCH
+STEP2: ATTACH BELOW POLICY TO ROLE
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "logs:*"
+            ],
+            "Resource": "arn:aws:logs:*:*:*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": "ec2:*",
+            "Resource": "*"
+        }
+    ]
+}
+
+STEP3: GO TO LAMBDA SERVICES AND CREATE A FUNCTION
+STEP4: CREATING FUNCTION FOR AMI BACKUP (SELECT PYTHON 2.7)
+
+# Automated AMI Backups
+# This code refered with slight changes: https://gist.github.com/bkozora/724e01903a9ad481d21e
+#
+# This script will search for all instances having a tag with "Backup" 
+# on it and are in 'running' state. As soon as it has the instances list, it loop through each instance
+# and create an AMI of it. Also, it will look for a "Retention" tag key which
+# will be used as a retention policy number in days. If there is no tag with
+# that name, it will use a 4 days default value for each AMI.If there is no tag with that name, it will use a 7 days default value for each AMI.
+#
+# After creating the AMI it creates a "DeleteOn" tag on the AMI indicating when
+# it will be deleted using the Retention value and another Lambda function 
+ 
+
+import boto3
+import collections
+import datetime 
+
+#By the time I used this script, the Lamda is not available in Mumbai region. So, I chosen Singapore region.
+#Specify the region in which EC2 Instances located and to create AMI's. Ex: Mumbai region (ap-south-1)
+ec = boto3.client('ec2', 'ap-south-1')
+#ec = boto3.client('ec2')
+
+def lambda_handler(event, context):
+    
+    reservations = ec.describe_instances(
+        Filters=[
+            {'Name': 'tag-key', 'Values': ['Backup']},
+            { 'Name': 'instance-state-name','Values': ['running'] }
+        ]
+         ).get(
+        'Reservations', []
+    )
+    
+    instances = sum(
+        [
+            [i for i in r['Instances']]
+            for r in reservations
+        ], [])
+
+    print "Found %d instances that need backing up" % len(instances)
+   
+    
+    to_tag = collections.defaultdict(list)
+
+    for instance in instances:
+        print "Instance name:" + [res['Value'] for res in instance['Tags'] if res['Key'] == 'Name'][0]
+        
+        #Default retention for 7 days if the tag is not specified
+        try:
+            retention_days = [
+                int(t.get('Value')) for t in instance['Tags']
+                if t['Key'] == 'Retention'][0]
+        except IndexError:
+            retention_days = 1
+        
+        finally:
+        
+            create_time = datetime.datetime.now()
+            #create_fmt = create_time.strftime('%d-%m-%Y.%H.%M.%S')
+            create_fmt = create_time.strftime('%d-%m-%Y')
+    
+            try:
+                #Check for instance in running state
+               # if(ec.describe_instance_status(InstanceIds=[instance['InstanceId']],Filters=[{ 'Name': 'instance-state-name','Values': ['running'] }])['InstanceStatuses'][0]['InstanceState']['Name'] == 'running'):    
+                    
+                #To make sure instance NoReboot enabled and to name the AMI
+                
+                AMIid = ec.create_image(InstanceId=instance['InstanceId'], Name="Lambda - " + [result['Value'] for result in instance['Tags'] if result['Key'] == 'Name'][0] + " - " + " From " + create_fmt, Description="Lambda created AMI of instance " + instance['InstanceId'], NoReboot=True, DryRun=False)
+                to_tag[retention_days].append(AMIid['ImageId'])
+
+                print "Retaining AMI %s of instance %s for %d days" % (
+                        AMIid['ImageId'],
+                        instance['InstanceId'],
+                        retention_days,
+                    )
+        
+        
+                for retention_days in to_tag.keys():
+                    delete_date = datetime.date.today() + datetime.timedelta(days=retention_days)
+                    delete_fmt = delete_date.strftime('%d-%m-%Y')
+                    print "Will delete %d AMIs on %s" % (len(to_tag[retention_days]), delete_fmt)
+                    
+                    #To create a tag to an AMI when it can be deleted after retention period expires
+                    ec.create_tags(
+                        Resources=to_tag[retention_days],
+                        Tags=[
+                            {'Key': 'DeleteOn', 'Value': delete_fmt},
+                            ]
+                        )
+            #If the instance is not in running state        
+            except IndexError as e:
+                print "Unexpected error, instance "+[res['Value'] for res in instance['Tags'] if res['Key'] == 'Name'][0]+"-"+"\""+instance['InstanceId']+"\""+" might be in the state other then 'running'. So, AMI creation skipped."    
+
+STEP5: ADD A CLOUDWATCH EVENT TRIGGER AND DEFINE THE CRONE.
+
+STEP 6: AMI DELETION: KEEP ALL THE ABOVE STEP SAME AND REPLACE THE BACKUP FUNCTION WITH DELETION FUNCTION
+FIND DELECTION FUNCTION BELOW:
+
+# Automated AMI and Snapshot Deletion
+#
+# @author Robert Kozora <bobby@kozora.me>
+#
+# This script will search for all instances having a tag with "Backup" or "Backup"
+# on it. As soon as we have the instances list, we loop through each instance
+# and reference the AMIs of that instance. We check that the latest daily Backup
+# succeeded then we store every image that's reached its DeleteOn tag's date for
+# deletion. We then loop through the AMIs, deregister them and remove all the
+# snapshots associated with that AMI.
+
+import boto3
+import collections
+import datetime
+import time
+import sys
+
+ec = boto3.client('ec2', 'ap-south-1')
+ec2 = boto3.resource('ec2', 'ap-south-1')
+images = ec2.images.filter(Owners=["842377134145"])
+
+def lambda_handler(event, context):
+    
+    reservations = ec.describe_instances(
+        Filters=[
+            {'Name': 'tag-key', 'Values': ['Backup']},
+            { 'Name': 'instance-state-name','Values': ['running'] }
+        ]
+         ).get(
+        'Reservations', []
+    )
+    
+    instances = sum(
+        [
+            [i for i in r['Instances']]
+            for r in reservations
+        ], [])
+
+    print "Found %d instances that need Cleaning up" % len(instances)
+   
+    
+    to_tag = collections.defaultdict(list)
+
+    for instance in instances:
+        print "Instance name:" + [res['Value'] for res in instance['Tags'] if res['Key'] == 'Name'][0]
+
+    reservations = ec.describe_instances(
+        Filters=[
+            {'Name': 'tag-key', 'Values': ['Backup', 'Backup']},
+        ]
+    ).get(
+        'Reservations', []
+    )
+
+    instances = sum(
+        [
+            [i for i in r['Instances']]
+            for r in reservations
+        ], [])
+
+    print "Found %d instances that need evaluated" % len(instances)
+
+    to_tag = collections.defaultdict(list)
+
+    date = datetime.datetime.now()
+    date_fmt = date.strftime('%d-%m-%Y')
+
+    imagesList = []
+
+    # Set to true once we confirm we have a Backup taken today
+    BackupSuccess = False
+
+    # Loop through all of our instances with a tag named "Backup"
+    for instance in instances:
+	imagecount = 0
+
+        # Loop through each image of our current instance
+        for image in images:
+
+            # Our other Lambda Function names its AMIs Lambda - i-instancenumber.
+            # We now know these images are auto created
+            if image.name.startswith("Lambda - " + [result['Value'] for result in instance['Tags'] if result['Key'] == 'Name'][0]):
+
+                # print "FOUND IMAGE " + image.id + " FOR INSTANCE " + instance['InstanceId']
+
+                # Count this image's occcurance
+	        imagecount = imagecount + 1
+
+                try:
+                    if image.tags is not None:
+                        deletion_date = [
+                            t.get('Value') for t in image.tags
+                            if t['Key'] == 'DeleteOn'][0]
+                        delete_date = time.strptime(deletion_date, "%d-%m-%Y")
+                except IndexError:
+                    deletion_date = False
+                    delete_date = False
+
+                today_time = datetime.datetime.now().strftime('%d-%m-%Y')
+                # today_fmt = today_time.strftime('%d-%m-%Y')
+                today_date = time.strptime(today_time, '%d-%m-%Y')
+
+                # If image's DeleteOn date is less than or equal to today,
+                # add this image to our list of images to process later
+                if delete_date <= today_date:
+                    imagesList.append(image.id)
+
+                # Make sure we have an AMI from today and mark BackupSuccess as true
+                if image.name.endswith(date_fmt):
+                    # Our latest Backup from our other Lambda Function succeeded
+                    BackupSuccess = True
+                    print "Latest Backup from " + date_fmt + " was a success"
+
+        print "instance " + instance['InstanceId'] + " has " + str(imagecount) + " AMIs"
+
+    print "============="
+
+    print "About to process the following AMIs:"
+    print imagesList
+
+    if BackupSuccess == True:
+
+        snapshots = ec.describe_snapshots(MaxResults=1000, OwnerIds=['842377134145'])['Snapshots']
+
+        # loop through list of image IDs
+        for image in imagesList:
+            print "deregistering image %s" % image
+            amiResponse = ec.deregister_image(
+                DryRun=False,
+                ImageId=image,
+            )
+
+            for snapshot in snapshots:
+                if snapshot['Description'].find(image) > 0:
+                    snap = ec.delete_snapshot(SnapshotId=snapshot['SnapshotId'])
+                    print "Deleting snapshot " + snapshot['SnapshotId']
+                    print "-------------"
+
+    else:
+        print "No current Backup found. Termination suspended."
+ 
