@@ -1,0 +1,171 @@
+Step 1: Install Java OpenJDK
+#sudo yum install java-1.8.0-openjdk-devel
+
+Step 2: Create a User
+Running WildFly as the root user is a security risk and not considered best practice.
+To create a new system user and group named wildfly with home directory /opt/wildfly run:
+#sudo groupadd -r wildfly
+#sudo useradd -r -g wildfly -d /opt/wildfly -s /sbin/nologin wildfly
+
+Step 3: Install WildFly
+Download link- http://wildfly.org/downloads/
+#wget packagelink
+When the download is completed, unpack the tar.gz file and move it to the /opt directory:
+#sudo tar xf /tmp/wildfly-$WILDFLY_VERSION.tar.gz -C /opt/
+
+Next, create a symbolic link wildfly that will point to the WildFly installation directory:
+sudo ln -s /opt/wildfly-$WILDFLY_VERSION /opt/wildfly
+
+WildFly will run under the wildfly user which needs to have access to the WildFly installation directory.
+#sudo chown -RH wildfly: /opt/wildfly
+
+Step 4: Configure Systemd
+The WildFly package includes files necessary to run WildFly as a service.
+
+Start by creating a directory which will hold the WildFly configuration file:
+sudo mkdir -p /etc/wildfly
+Copy the configuration file to the /etc/wildfly directory:
+#sudo cp /opt/wildfly/docs/contrib/scripts/systemd/wildfly.conf /etc/wildfly/
+By default, WildFly will run in a standalone mode and will listen on all interfaces. You can edit the file according to your needs.
+# The configuration you want to run
+WILDFLY_CONFIG=standalone.xml
+
+# The mode you want to run
+WILDFLY_MODE=standalone
+
+# The address to bind to
+WILDFLY_BIND=0.0.0.0
+
+Next copy the WildFly launch.sh script to the /opt/wildfly/bin/ directory:
+sudo cp /opt/wildfly/docs/contrib/scripts/systemd/launch.sh /opt/wildfly/bin/
+The scripts inside bin directory must have executable flag:
+sudo sh -c 'chmod +x /opt/wildfly/bin/*.sh'
+Copy the systemd unit file named to the /etc/systemd/system/ directory:
+sudo cp /opt/wildfly/docs/contrib/scripts/systemd/wildfly.service /etc/systemd/system/
+Notify systemd that we created a new unit file:
+sudo systemctl daemon-reload
+
+Start the WildFly service an enable it to be automatically started at boot time by running:
+sudo systemctl start wildfly
+sudo systemctl enable wildfly
+sudo systemctl status wildfly
+
+Step 5: Firewall If needed,
+sudo firewall-cmd --zone=public --permanent --add-port=8080/tcpsudo 
+firewall-cmd --reload
+
+Step 6: Configure WildFly Authentication
+
+To add a new user use the add-user.sh script that is located the WildFly’s bin directory:
+sudo /opt/wildfly/bin/add-user.sh
+
+What type of user do you wish to add? 
+ a) Management User (mgmt-users.properties) 
+ b) Application User (application-users.properties)
+(a):
+
+Enter the details of the new user to add.
+Using realm 'ManagementRealm' as discovered from the existing property files.
+Username : linuxize
+Password recommendations are listed below. To modify these restrictions edit the add-user.properties configuration file.
+ - The password should be different from the username
+ - The password should not be one of the following restricted values {root, admin, administrator}
+ - The password should contain at least 8 characters, 1 alphabetic character(s), 1 digit(s), 1 non-alphanumeric symbol(s)
+Password : 
+Re-enter Password : 
+What groups do you want this user to belong to? (Please enter a comma separated list, or leave blank for none)[  ]: 
+About to add user 'linuxize' for realm 'ManagementRealm'
+Is this correct yes/no? yes
+Added user 'linuxize' to file '/opt/wildfly-16.0.0.Final/standalone/configuration/mgmt-users.properties'
+Added user 'linuxize' to file '/opt/wildfly-16.0.0.Final/domain/configuration/mgmt-users.properties'
+Added user 'linuxize' with groups  to file '/opt/wildfly-16.0.0.Final/standalone/configuration/mgmt-groups.properties'
+Added user 'linuxize' with groups  to file '/opt/wildfly-16.0.0.Final/domain/configuration/mgmt-groups.properties'
+Is this new user going to be used for one AS process to connect to another AS process? 
+e.g. for a slave host controller connecting to the master or for a Remoting connection for server to server EJB calls.
+yes/no? yes
+To represent the user add the following to the server-identities definition <secret value="UGFuMjNkZWo3NyNA" />
+
+Step 6: Test the WildFly Installation
+http://<your_domain_or_IP_address>:8080
+
+Step 7: Access WildFly Administration Console
+
+Command-Line Interface
+To access the WildFly Administration Console from the command line you can use the jboss-cli.sh script.
+Navigate to the WildFly’s bin directory and run the script with the --connect option:
+cd /opt/wildfly/bin/
+./jboss-cli.sh --connect
+You will be asked to enter your administrative username and password (created in step 6):
+Authenticating against security realm: ManagementRealm
+Username: linuxize
+Password:
+
+Once you login the console prompt will change to [standalone@localhost:9990 /]. Type help to get a list of commands and command syntax.
+From here you can deploy and undeploy your applications, manage users and groups and configure and monitor WildFly server.
+
+Web Interface
+If you prefer to manage your server from the GUI, WildFly also provides a web-based console.
+By default, the WildFly administration console is available only from localhost at http://localhost:9990/console. Sign in using the user you have created in step 6.
+
+
+If you want to access the console from remote locations you’ll need to make small modifications to the wildfly.service, wildfly.conf and launch.sh files.
+
+Open the wildfly.conf and append WILDFLY_CONSOLE_BIND=0.0.0.0 at the end of the file.
+
+/etc/wildfly/wildfly.conf
+# The configuration you want to run
+WILDFLY_CONFIG=standalone.xml
+
+# The mode you want to run
+WILDFLY_MODE=standalone
+
+# The address to bind to
+WILDFLY_BIND=0.0.0.0
+
+# The address console to bind to
+WILDFLY_CONSOLE_BIND=0.0.0.0
+
+Open the launch.sh and edit the highlighted lines: /opt/wildfly/bin/launch.sh
+#!/bin/bash
+
+if [ "x$WILDFLY_HOME" = "x" ]; then
+    WILDFLY_HOME="/opt/wildfly"
+fi
+
+if [[ "$1" == "domain" ]]; then
+    $WILDFLY_HOME/bin/domain.sh -c $2 -b $3 -bmanagement $4
+else
+    $WILDFLY_HOME/bin/standalone.sh -c $2 -b $3 -bmanagement $4
+fi
+
+Restart the service for changes to take effect:
+Open the wildfly.service and edit the highlighted lines:
+[Unit]
+Description=The WildFly Application Server
+After=syslog.target network.target
+Before=httpd.service
+
+[Service]
+Environment=LAUNCH_JBOSS_IN_BACKGROUND=1
+EnvironmentFile=-/etc/wildfly/wildfly.conf
+User=wildfly
+LimitNOFILE=102642
+PIDFile=/var/run/wildfly/wildfly.pid
+ExecStart=/opt/wildfly/bin/launch.sh $WILDFLY_MODE $WILDFLY_CONFIG $WILDFLY_BIND $WILDFLY_CONSOLE_BIND
+StandardOutput=null
+
+[Install]
+WantedBy=multi-user.target
+
+Create the /var/run/wildfly directory and set correct permissions:
+
+sudo mkdir /var/run/wildfly/
+sudo chown wildfly: /var/run/wildfly/
+
+Notify systemd that the unit file was changed:
+sudo systemctl daemon-reload
+sudo systemctl restart wildfly
+
+Assuming that port 9990 is not blocked in your firewall, you should be able to access the WildFly administration console at http://<your_domain_or_IP_address>:9990/console.
+
+https://linuxize.com/post/how-to-install-wildfly-on-centos-7/
