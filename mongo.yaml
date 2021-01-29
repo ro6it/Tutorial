@@ -1,0 +1,15 @@
+version: '2.0'
+services:
+    run:
+        container_name: mongodb-db
+        restart: 'always'
+        command: mongod --auth
+        volumes:
+            - /var/lib/docker/mongo:/data/db'
+        ports:
+            - '7299:27017'
+        environment:
+             MONGO_INITDB_ROOT_USERNAME: admin
+             MONGO_INITDB_ROOT_PASSWORD: igdooop
+             MONGO_INITDB_DATABASE: inves
+        image: mongo:3.4.2
